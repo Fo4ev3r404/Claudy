@@ -1,0 +1,50 @@
+name: Build Claudy v7 Release
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Build Claudy_v7_Portable.exe
+        run: |
+          python -m PyInstaller --noconfirm --onefile --noconsole --noupx `
+            --name "Claudy_v7_Portable" `
+            --icon "assets/claudy.ico" `
+            --version-file "version_info.txt" `
+            --add-data "claudy_ui.html;." `
+            --add-data "assets;assets" `
+            --add-data "runs/player_v7/weights/best_640.onnx;runs/player_v7/weights" `
+            --collect-all webview `
+            --collect-all onnxruntime `
+            --exclude-module pandas `
+            --exclude-module matplotlib `
+            --exclude-module scipy `
+            --exclude-module onnx `
+            --exclude-module setuptools `
+            --exclude-module torch `
+            --exclude-module torchvision `
+            --exclude-module ultralytics `
+            rob_run_loader.py
+
+      - name: Upload Build Artifact (Ready for SignPath)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Claudy_v7_Portable
+          path: dist/Claudy_v7_Portable.exe

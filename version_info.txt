@@ -1,0 +1,28 @@
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 7, 0, 0),
+    prodvers=(1, 7, 0, 0),
+    mask=0x3f,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+      StringTable(
+        '040904B0',
+        [StringStruct('CompanyName', 'Claudy Studio'),
+        StringStruct('FileDescription', 'Claudy 1.7 Desktop Vision Suite'),
+        StringStruct('FileVersion', '1.7.0.0'),
+        StringStruct('InternalName', 'Claudy_v7'),
+        StringStruct('LegalCopyright', 'Copyright (C) 2026 Claudy Studio'),
+        StringStruct('OriginalFilename', 'Claudy_v7_Portable.exe'),
+        StringStruct('ProductName', 'Claudy 1.7 Vision Client'),
+        StringStruct('ProductVersion', '1.7.0.0')])
+      ]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)

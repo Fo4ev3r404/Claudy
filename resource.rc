@@ -1,0 +1,32 @@
+#include <windows.h>
+
+1 ICON "assets/claudy.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     1,7,0,0
+PRODUCTVERSION  1,7,0,0
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0x0L
+FILEOS          VOS__WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Claudy Studio\0"
+            VALUE "FileDescription",  "Claudy 1.7 Desktop Vision Client\0"
+            VALUE "FileVersion",      "1.7.0.0\0"
+            VALUE "InternalName",     "Claudy_v7\0"
+            VALUE "LegalCopyright",   "Copyright (C) 2026 Claudy Studio\0"
+            VALUE "OriginalFilename", "Claudy_v7.exe\0"
+            VALUE "ProductName",      "Claudy 1.7 Vision Suite\0"
+            VALUE "ProductVersion",   "1.7.0.0\0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END
