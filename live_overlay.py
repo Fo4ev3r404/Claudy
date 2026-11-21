@@ -12,6 +12,15 @@ import numpy as np
 import onnxruntime as ort
 from PIL import ImageGrab
 
+# Force Per-Monitor DPI Awareness BEFORE mss or tkinter so 125%/150% Windows scaling never offsets ESP boxes
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(2)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
 if getattr(sys, "frozen", False):
     EXE_DIR = os.path.dirname(sys.executable)
     MEIPASS_DIR = getattr(sys, "_MEIPASS", EXE_DIR)
@@ -248,10 +257,11 @@ class PlayerSmoother:
                 self.next_id += 1
 
         self.tracks = new_tracks
+        # Only return fresh detections (missed == 0) so ESP boxes NEVER lag behind moving players!
         return [
             (tr["id"], tr["box"], tr["missed"])
             for tr in self.tracks
-            if tr["missed"] <= 2
+            if tr["missed"] == 0
         ]
 
 
@@ -260,21 +270,21 @@ def draw_corner_box(canvas, x1, y1, x2, y2, box_color="#00FF88", corner_color="#
     if BOX_STYLE == "Hidden":
         return
     if BOX_STYLE == "Full Box":
-        canvas.create_rectangle(x1, y1, x2, y2, outline=box_color, width=2)
+        canvas.create_rectangle(x1, y1, x2, y2, outline=box_color, width=1)
         return
     w = max(8.0, x2 - x1)
     h = max(12.0, y2 - y1)
     c = max(6.0, min(18.0, w * 0.28, h * 0.22))
 
-    canvas.create_rectangle(x1, y1, x2, y2, outline=box_color, width=1)
+    # Draw crisp corner brackets only (keeps player silhouette unobstructed)
     for px, py, dx, dy in (
         (x1, y1, 1, 1),
         (x2, y1, -1, 1),
         (x1, y2, 1, -1),
         (x2, y2, -1, -1),
     ):
-        canvas.create_line(px, py, px + dx * c, py, fill=corner_color, width=2)
-        canvas.create_line(px, py, px, py + dy * c, fill=corner_color, width=2)
+        canvas.create_line(px, py, px + dx * c, py, fill=box_color, width=2)
+        canvas.create_line(px, py, px, py + dy * c, fill=box_color, width=2)
 
 
 def make_clickthrough(hwnd):
@@ -299,8 +309,11 @@ def make_clickthrough(hwnd):
     user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE)
 
     WDA_EXCLUDEFROMCAPTURE = 0x00000011
+    WDA_MONITOR = 0x00000001
     try:
-        user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        ok = user32.SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
+        if not ok:
+            user32.SetWindowDisplayAffinity(hwnd, WDA_MONITOR)
     except Exception:
         pass
 
@@ -412,6 +425,7 @@ def main():
         "running": True,
         "aim_enabled": True,
         "center_mode": True,
+        "draw_seq": 0,
     }
     apply_config_to_globals(state)
 
@@ -425,6 +439,8 @@ def main():
     cap_lock = threading.Lock()
     cap_state = {"player_blob": None, "seq": 0, "is_center": True}
     cap_event = threading.Event()
+    req_event = threading.Event()
+    req_event.set()  # Request first frame immediately
 
     def config_watcher():
         last_mtime = os.path.getmtime(CONFIG_PATH) if os.path.exists(CONFIG_PATH) else 0.0
@@ -444,6 +460,11 @@ def main():
         with mss.MSS() as sct:
             full_mon = sct.monitors[1]
             while state["running"]:
+                # Wait until inference_worker is ready for a fresh frame (zero buffered stale frames!)
+                if not req_event.wait(timeout=0.05):
+                    continue
+                req_event.clear()
+
                 is_center = state["center_mode"]
                 target_mon = crop_mon if is_center else full_mon
                 try:
@@ -460,6 +481,7 @@ def main():
                         )
                     except Exception:
                         time.sleep(0.02)
+                        req_event.set()
                         continue
 
                 p_blob = prep_640.make_blob(frame) if is_center else prep_960.make_blob(frame)
@@ -472,7 +494,6 @@ def main():
 
     def inference_worker():
         last_seq = -1
-        min_next_seq = 0
         locked_key = None
         recoil_acc = 0.0
         last_recoil_t = time.perf_counter()
@@ -482,7 +503,7 @@ def main():
 
             with cap_lock:
                 seq = cap_state["seq"]
-                if seq == last_seq or seq < min_next_seq or cap_state["player_blob"] is None:
+                if seq == last_seq or cap_state["player_blob"] is None:
                     continue
                 p_blob = cap_state["player_blob"]
                 is_center = cap_state["is_center"]
@@ -508,7 +529,6 @@ def main():
             players_smooth = player_smoother.update(players_filtered)
 
             rmb_held = bool(ctypes.windll.user32.GetAsyncKeyState(AIM_VK) & 0x8000)
-            moved_mouse = False
 
             if state["aim_enabled"] and rmb_held:
                 targets = [
@@ -525,8 +545,6 @@ def main():
                 if chosen is None and targets:
                     best_dist = AIM_FOV_PX
                     for tid, tx, ty, missed in targets:
-                        if missed > 0:
-                            continue
                         d = math.hypot(tx - center_x, ty - center_y)
                         if d < best_dist:
                             best_dist = d
@@ -534,16 +552,14 @@ def main():
 
                 if chosen is not None:
                     locked_key = chosen[0]
-                    if chosen[3] == 0:
-                        err_x = chosen[1] - center_x
-                        err_y = chosen[2] - center_y
-                        dx = 0.0 if abs(err_x) < AIM_X_DEADZONE else err_x * AIM_SMOOTH_X
-                        dy = 0.0 if abs(err_y) < AIM_Y_DEADZONE else err_y * AIM_SMOOTH_Y
-                        if abs(dx) >= 1.0 or abs(dy) >= 1.0:
-                            dx = max(-AIM_MAX_STEP, min(AIM_MAX_STEP, dx))
-                            dy = max(-AIM_MAX_STEP, min(AIM_MAX_STEP, dy))
-                            move_mouse_rel(dx, dy)
-                            moved_mouse = True
+                    err_x = chosen[1] - center_x
+                    err_y = chosen[2] - center_y
+                    dx = 0.0 if abs(err_x) < AIM_X_DEADZONE else err_x * AIM_SMOOTH_X
+                    dy = 0.0 if abs(err_y) < AIM_Y_DEADZONE else err_y * AIM_SMOOTH_Y
+                    if abs(dx) >= 1.0 or abs(dy) >= 1.0:
+                        dx = max(-AIM_MAX_STEP, min(AIM_MAX_STEP, dx))
+                        dy = max(-AIM_MAX_STEP, min(AIM_MAX_STEP, dy))
+                        move_mouse_rel(dx, dy)
             else:
                 locked_key = None
 
@@ -560,15 +576,15 @@ def main():
             else:
                 recoil_acc = 0.0
 
-            if moved_mouse:
-                with cap_lock:
-                    min_next_seq = cap_state["seq"] + 1
+            # Request the next fresh frame AFTER mouse movement so capture is always post-move & 0ms stale!
+            req_event.set()
 
             dt = time.perf_counter() - t0
             fps = 1.0 / dt if dt > 0 else 0.0
             with lock:
                 state["players"] = [box for _, box, _ in players_smooth]
                 state["fps"] = fps
+                state["draw_seq"] += 1
 
     threading.Thread(target=config_watcher, daemon=True).start()
     threading.Thread(target=capture_worker, daemon=True).start()
@@ -584,7 +600,7 @@ def main():
     canvas = tk.Canvas(root, width=scr_w, height=scr_h, bg=TRANSPARENT_BG, highlightthickness=0)
     canvas.pack(fill="both", expand=True)
 
-    root.update_idletasks()
+    root.update()
     GA_ROOT = 2
     hwnd = ctypes.windll.user32.GetAncestor(root.winfo_id(), GA_ROOT) or root.winfo_id()
     make_clickthrough(hwnd)
@@ -614,8 +630,16 @@ def main():
 
     threading.Thread(target=hotkey_watcher, daemon=True).start()
 
+    last_drawn_seq = -1
+
     def draw_loop():
+        nonlocal last_drawn_seq
         with lock:
+            cur_seq = state["draw_seq"]
+            if cur_seq == last_drawn_seq:
+                root.after(2, draw_loop)
+                return
+            last_drawn_seq = cur_seq
             players = list(state["players"])
             fps = state["fps"]
         aim_on = state["aim_enabled"]
@@ -695,9 +719,9 @@ def main():
                     font=("Consolas", 9, "bold"),
                 )
 
-        root.after(4, draw_loop)
+        root.after(2, draw_loop)
 
-    root.after(16, draw_loop)
+    root.after(8, draw_loop)
     root.mainloop()
     state["running"] = False
 
